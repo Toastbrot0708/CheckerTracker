@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CheckerTracker</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="CheckerTracker — security visibility for authorized environments.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!--
+  CheckerTracker — Security visibility for authorized environments.
+
+  No build step, no dependencies, no network requirements. Serve this directory
+  over HTTP (a secure context is needed for WebCrypto, so http://localhost
+  works) or open the file directly for everything except at-rest encryption
+  and SHA-family hashing.
+
+  Each script below is one module on the global `CT` namespace, loaded in
+  dependency order as a classic script. See docs/ARCHITECTURE.md.
+
+  SAFETY BOUNDARY: this application performs read-only observation and analysis
+  only. It contains no exploitation, credential capture, authentication bypass,
+  persistence, or evasion capability of any kind. See SECURITY.md.
+-->
+
+<div id="ct-root" class="app-shell">
+  <header id="ct-appbar"></header>
+  <main id="ct-view" tabindex="-1"></main>
+  <nav id="ct-tabbar" aria-label="Primary"></nav>
+</div>
+<div id="ct-overlay-root"></div>
+<div id="ct-sheet-root"></div>
+<div id="ct-toast-root" aria-live="polite" aria-atomic="false"></div>
+
+<!-- Foundation -->
+<script src="src/01-util.js"></script>
+<script src="src/02-icons.js"></script>
+<script src="src/03-dom.js"></script>
+<script src="src/04-crypto.js"></script>
+<script src="src/05-net.js"></script>
+
+<!-- Reference data and simulated environments -->
+<script src="src/06-data.js"></script>
+<script src="src/07-demo.js"></script>
+
+<!-- Analysis engines -->
+<script src="src/08-engine-capabilities.js"></script>
+<script src="src/09-engine-tls.js"></script>
+<script src="src/10-engine-web.js"></script>
+<script src="src/11-engine-analyzer.js"></script>
+<script src="src/12-engine-risk.js"></script>
+<script src="src/13-engine-assetdb.js"></script>
+<script src="src/14-engine-dns.js"></script>
+<script src="src/15-engine-report.js"></script>
+<script src="src/16-engine-scanner.js"></script>
+
+<!-- State -->
+<script src="src/17-store.js"></script>
+
+<!-- Presentation -->
+<script src="src/18-ui-shell.js"></script>
+<script src="src/19-ui-dashboard.js"></script>
+<script src="src/20-ui-scan.js"></script>
+<script src="src/21-ui-findings.js"></script>
+<script src="src/22-ui-assets.js"></script>
+<script src="src/23-ui-reports.js"></script>
+<script src="src/24-ui-tools.js"></script>
+<script src="src/25-ui-settings.js"></script>
+<script src="src/26-ui-boot.js"></script>
+
+</body>
+</html>
