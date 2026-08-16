@@ -14,40 +14,80 @@ kind. See [SECURITY.md](SECURITY.md).
 
 ---
 
-## ⚠️ Build status: source transfer incomplete
+## Status
 
-The application was written and reviewed as a single self-contained
-`index.html` (~475 KB, ~9,600 lines). The session that produced it could not
-run `git push` — a safety classifier blocked every shell write command, the
-Artifact publisher and subagents alike — so the source is being transferred
-through the GitHub API one module at a time, and that transfer did not finish.
+Complete. Every module `index.html` loads is present in `src/`, and the app
+installs to a phone home screen as a progressive web app.
 
-**To see exactly what is missing:** `index.html` lists all 26 required modules
-in load order. Compare that list against the contents of `src/`. Anything in
-the loader without a matching file has not landed yet.
+One caveat worth stating plainly: **it has never been loaded in a browser.**
+The session that wrote it had no Node, no bundler and no browser, so the code
+was reviewed by reading rather than by running. Roughly fifteen defects were
+found and fixed that way — listener leaks, a persistence path that would have
+silently dropped encryption, generated addresses falling outside the declared
+scope, a score that saturated at zero — but expect to find something on first
+load.
 
-**Until every module is present the app will not run** — the loader references
-files that do not exist. Nothing is wrong with the code; it simply has not all
-arrived.
+---
 
-**The fast fix.** The intact single file still exists in the build session's
-workspace. Re-running that session with normal shell access lets the whole
-thing be committed in one step, with no transcription risk:
+## Running it
+
+Serve the directory over HTTP. A secure context is required for WebCrypto, so
+`http://localhost` qualifies:
 
 ```
-cd /home/user/CheckerTracker && git add -A && git commit -m "Add CheckerTracker" && git push -u origin claude/checkertracker-security-app-x37epz
+python3 -m http.server 8080
+# then visit http://localhost:8080/
 ```
 
-That container is ephemeral, so this only works while the session is alive.
-Otherwise the remaining modules have to be transferred through the API as the
-landed ones were.
+No build step, no package manager, no dependencies. Modules load as classic
+scripts in dependency order onto a single `CT` namespace.
 
-Also worth knowing: the build session had no way to *execute* the app — no
-Node, no browser, no bundler. The code was reviewed by reading rather than by
-running, and roughly fifteen defects were found and fixed that way (listener
-leaks, a persistence path that would have silently dropped encryption,
-generated addresses falling outside the declared scope, a score that saturated
-at zero). It has never been loaded in a browser.
+Opening `index.html` straight from disk works too, except for at-rest
+encryption and SHA-family hashing — `file://` is not a secure context, so
+WebCrypto is unavailable there.
+
+### On a phone
+
+CheckerTracker installs to the home screen, runs full-screen without browser
+chrome, and works offline once loaded.
+
+First publish it with **GitHub Pages** — *Settings → Pages*, source branch
+`claude/checkertracker-security-app-x37epz` (or merge the branch to `main`
+first). The app is then served at:
+
+```
+https://toastbrot0708.github.io/CheckerTracker/
+```
+
+Pages on a **private** repository requires a paid plan. On the free plan, make
+the repository public first (*Settings → General → Change visibility*). There
+is nothing sensitive in it: no credentials, no telemetry endpoint, no backend,
+and the demo estate is fictional.
+
+Then, on the phone:
+
+| Platform | Steps |
+| --- | --- |
+| **iOS / iPadOS** | Open the URL in **Safari** — Chrome on iOS cannot install web apps — then Share → *Add to Home Screen* |
+| **Android** | Open in Chrome → menu → *Install app* / *Add to Home screen* |
+
+After the first load the service worker keeps the whole application cached, so
+it launches without a connection. It deliberately never caches cross-origin
+requests: the DNS Inspector's DoH queries and the header analyzer's fetch
+always hit the network, because a cached answer presented as a live lookup
+would make the app lie about what it observed.
+
+Updates never interrupt you. A new version installs in the background and
+waits; you get a quiet "relaunch to apply" toast rather than a reload in the
+middle of an assessment.
+
+### First run
+
+| Option | What happens |
+| --- | --- |
+| **Start assessment** | Empty environment; declare a scope and run a scan. |
+| **Explore demo environment** | Seeds two complete assessments over a simulated 18-asset estate, so findings, history, comparison, the map and reports are populated immediately. |
+| **Import existing assessment** | Load a CheckerTracker JSON export; findings and score are recomputed locally. |
 
 ---
 
@@ -212,36 +252,24 @@ treatments.
 
 ---
 
-## Running it
-
-Once all modules are present, serve the directory over HTTP (a secure context
-is required for WebCrypto, so `http://localhost` qualifies):
-
-```
-python3 -m http.server 8080
-# then visit http://localhost:8080/
-```
-
-No build step, no package manager, no dependencies. Modules load as classic
-scripts in dependency order onto a single `CT` namespace.
-
-### First run
-
-| Option | What happens |
-| --- | --- |
-| **Start assessment** | Empty environment; declare a scope and run a scan. |
-| **Explore demo environment** | Seeds two complete assessments over a simulated 18-asset estate, so findings, history, comparison, the map and reports are populated immediately. |
-| **Import existing assessment** | Load a CheckerTracker JSON export; findings and score are recomputed locally. |
-
----
-
 ## Repository layout
 
 ```
 index.html            Document shell and module loader (lists all 26 modules)
 styles.css            Design system
 src/                  Application modules, loaded in dependency order
+
+manifest.webmanifest  Home-screen install metadata
+sw.js                 Offline application shell
+pwa.js                Service worker registration and the iOS icon
+icon.svg              App icon (full bleed, maskable safe zone)
+favicon.svg           Browser tab icon
+
 README.md             This file
 SECURITY.md           Safety boundaries and scope model
 docs/ARCHITECTURE.md  Module contracts and data model
 ```
+
+The three PWA files are deployment plumbing, not part of `CT`. Delete them and
+the application behaves identically — it simply stops installing to a home
+screen and stops working offline.
