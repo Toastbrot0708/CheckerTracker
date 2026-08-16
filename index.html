@@ -5,7 +5,16 @@
 <title>CheckerTracker</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#080B11">
 <meta name="description" content="CheckerTracker — security visibility for authorized environments.">
+
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CheckerTracker">
+
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -70,6 +79,10 @@
 <script src="src/24-ui-tools.js"></script>
 <script src="src/25-ui-settings.js"></script>
 <script src="src/26-ui-boot.js"></script>
+
+<!-- Home-screen install and offline shell. Not part of CT; the app runs
+     identically without it. -->
+<script src="pwa.js"></script>
 
 </body>
 </html>

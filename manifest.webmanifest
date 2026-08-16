@@ -1,0 +1,18 @@
+{
+  "name": "CheckerTracker",
+  "short_name": "CheckerTracker",
+  "description": "Security visibility for authorized environments — asset inventory, configuration analysis and explainable risk scoring.",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#080B11",
+  "theme_color": "#080B11",
+  "categories": ["utilities", "productivity", "security"],
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
