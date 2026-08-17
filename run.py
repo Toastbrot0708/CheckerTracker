@@ -6,36 +6,36 @@
     python3 run.py --port 8900  use a different port
 
 Written for a-Shell on iOS, where Python runs inside the host app. Three
-things there need handling that a desktop does not:
+things there differ from a desktop and all three are handled here:
 
-  * Output is block-buffered and reconfigure(line_buffering=True) is not
-    enough, so print is replaced with a flushing version. Without this the
-    startup banner never appears and the service looks like it died.
-  * A previous run keeps serving after the prompt returns, so a second start
-    cannot bind the port and a third crashes the interpreter.
-  * The shell's working directory is easy to lose, so every path here is
-    absolute.
+  * Output is block-buffered and reconfigure() is not enough, so print is
+    replaced with a flushing version. stderr is swallowed entirely, so any
+    failure is reported on stdout instead — otherwise a crash looks like a
+    silent exit.
+  * Binding a port and closing it leaves the socket in TIME_WAIT long enough
+    that the real bind moments later fails. So the port is never tested in
+    advance; the actual bind error is caught and explained instead.
+  * A previous run can keep serving after the prompt returns, which is why
+    that error needs a clear explanation rather than a traceback.
 """
 
 import builtins
 import os
-import socket
 import sys
+import traceback
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 BRANCH = "claude/checkertracker-security-app-x37epz"
 ZIP_URL = ("https://github.com/Toastbrot0708/CheckerTracker/archive/refs/heads/%s.zip"
            % BRANCH)
 
+EADDRINUSE = (48, 98)          # BSD/Darwin, Linux
+
 
 def force_flush():
-    """Make every print reach the screen immediately.
-
-    Applies to imported modules too, since they all call builtins.print.
-    """
+    """Make every print reach the screen immediately, imports included."""
     try:
         sys.stdout.reconfigure(line_buffering=True)
-        sys.stderr.reconfigure(line_buffering=True)
     except (AttributeError, ValueError):
         pass
 
@@ -46,21 +46,6 @@ def force_flush():
         original(*args, **kwargs)
 
     builtins.print = flushing
-
-
-def port_is_free(port):
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        probe.bind(("0.0.0.0", port))
-        return True
-    except OSError:
-        return False
-    finally:
-        try:
-            probe.close()
-        except OSError:
-            pass
 
 
 def update():
@@ -111,6 +96,17 @@ def update():
     return True
 
 
+def explain_in_use(port):
+    print(
+        "\nPort %d is already in use.\n\n"
+        "An earlier run is probably still serving. In a-Shell the prompt comes\n"
+        "back while the service keeps going, so you may not need a new one:\n\n"
+        "    open http://localhost:%d/ in Safari\n\n"
+        "To really restart, force-quit a-Shell (swipe it away in the app\n"
+        "switcher) and run this again. Or use another port:\n\n"
+        "    python3 run.py --port %d\n" % (port, port, port + 1))
+
+
 def port_from(argv):
     if "--port" in argv:
         index = argv.index("--port")
@@ -126,28 +122,32 @@ def main():
     if "--update" in sys.argv[1:] and not update():
         sys.exit(1)
 
-    port = port_from(argv)
-    if not port_is_free(port):
-        print(
-            "\nPort %d is already in use.\n\n"
-            "An earlier run is almost certainly still serving — in a-Shell the\n"
-            "prompt comes back but the service keeps going. You do not need a\n"
-            "new one:\n\n"
-            "    open http://localhost:%d/ in Safari\n\n"
-            "To actually restart, force-quit a-Shell (swipe it away in the app\n"
-            "switcher) and run this again. Or pick another port:\n\n"
-            "    python3 run.py --port %d\n" % (port, port, port + 1))
-        sys.exit(1)
-
     server_dir = os.path.join(ROOT, "server")
     if not os.path.isdir(server_dir):
-        print("server/ is missing. Run:  python3 run.py --update")
+        print("server/ is missing next to run.py. Run:  python3 run.py --update")
         sys.exit(1)
 
     sys.path.insert(0, server_dir)
     sys.argv = [sys.argv[0]] + argv
-    import checkertracker
-    checkertracker.main()
+
+    try:
+        import checkertracker
+        checkertracker.main()
+    except OSError as err:
+        if getattr(err, "errno", None) in EADDRINUSE:
+            explain_in_use(port_from(argv))
+            sys.exit(1)
+        print("\nThe service could not start:\n")
+        print(traceback.format_exc())
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    except Exception:                              # noqa: BLE001
+        # stderr is invisible in a-Shell, so the traceback goes to stdout or
+        # it is lost and the failure looks like a silent exit.
+        print("\nThe service could not start:\n")
+        print(traceback.format_exc())
+        sys.exit(1)
 
 
 if __name__ == "__main__":
