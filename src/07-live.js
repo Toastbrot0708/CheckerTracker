@@ -1,9 +1,8 @@
 /* ============================================================================
    MODULE: CT.live — client for the local scanner service
    ---------------------------------------------------------------------------
-   Takes the slot the demo environment used to occupy. Every value that
-   reaches the UI through here was measured by the service against a real
-   network; nothing in this file invents anything.
+   Takes the slot the demo environment used to occupy. Every value reaching
+   the UI through here was measured against a real network.
    ========================================================================= */
 CT.live = (function () {
   'use strict';
@@ -13,9 +12,9 @@ CT.live = (function () {
 
   const state = { online: false, checked: false, info: null, error: null };
 
-  /* The service prints a URL carrying the token. Take it once, remember it
-     for the session, and strip it from the address bar so it is not shared
-     by copying the URL out of the browser. */
+  /* The service prints a URL carrying the token. Take it once, keep it for
+     the session, and strip it from the address bar so copying the URL out of
+     the browser does not hand the token along with it. */
   (function captureToken() {
     try {
       const url = new URL(location.href);
@@ -62,9 +61,11 @@ CT.live = (function () {
       state.info = await call('/health', null, 4000);
       state.online = true;
       state.error = null;
+      try { cachedEnv = await call('/interfaces', null, 8000); } catch (e) { cachedEnv = null; }
     } catch (err) {
       state.online = false;
       state.info = null;
+      cachedEnv = null;
       state.error = err.code === 'unauthorized'
         ? 'The scanner service is running but rejected this session. Reopen the URL the service printed.'
         : 'No scanner service is reachable at this address.';
@@ -73,7 +74,6 @@ CT.live = (function () {
     return state.online;
   }
 
-  /** The machine's real network configuration. */
   async function environment(force) {
     if (cachedEnv && !force) return cachedEnv;
     cachedEnv = await call('/interfaces', null, 8000);
@@ -89,7 +89,7 @@ CT.live = (function () {
   function checkPort(host, port) { return call('/port', { host, port }, 10000); }
 
   /**
-   * Subscribe to a run's progress. EventSource cannot send an Authorization
+   * Subscribe to a run's progress. EventSource cannot set an Authorization
    * header, so the token rides in the query string for this one request.
    */
   function stream(runId, handlers) {
@@ -111,10 +111,10 @@ CT.live = (function () {
 
   /* ==========================================================================
      HYDRATION
-     The service returns measurements. Naming a port, resolving an OUI and
-     decoding a certificate all belong to reference data and parsers the
-     client already holds, so they happen here rather than being duplicated
-     server-side where they could drift.
+     The service measures. Naming a port, resolving an OUI and decoding a
+     certificate use reference data and parsers the client already holds, so
+     they happen here rather than being duplicated server-side where the two
+     copies could drift apart.
      ======================================================================= */
 
   function hydrateService(service) {
@@ -138,7 +138,7 @@ CT.live = (function () {
 
   /**
    * Turn service records into full CT assets.
-   * @param {Array} assets    raw records from the service
+   * @param {Array} assets     raw records from the scanner service
    * @param {Array} [baseline] previous assessment's assets, for inInventory
    */
   function hydrate(assets, baseline) {
@@ -149,9 +149,9 @@ CT.live = (function () {
       asset.services = (raw.services || []).map(hydrateService);
       asset.tls = hydrateTls(raw.tls);
 
-      // A randomised MAC carries no manufacturer, so resolving it would
-      // attribute the device to whoever owns that arbitrary prefix.
-      asset.vendor = (raw.mac && !raw.macRandomised) ? CT.data.vendorForMac(raw.mac) : null;
+      // A randomised MAC carries no manufacturer. Resolving it would
+      // attribute the device to whoever happens to own that prefix.
+      asset.vendor = (raw.mac && !raw.macRandomised) ? CT.data.lookupVendor(raw.mac) : null;
       if (raw.macRandomised) asset.vendorNote = 'randomised MAC — no manufacturer can be derived';
 
       // Null until a baseline exists: on a first assessment there is nothing
@@ -166,24 +166,50 @@ CT.live = (function () {
     });
   }
 
+  /** Shape the observed environment like CT's network record. */
+  function network() {
+    if (!cachedEnv) return null;
+    const primary = cachedEnv.primary;
+    return {
+      name: cachedEnv.wifi && cachedEnv.wifi.ssid ? cachedEnv.wifi.ssid : 'Local network',
+      ssid: cachedEnv.wifi ? cachedEnv.wifi.ssid : null,
+      type: cachedEnv.wifi ? 'Wi-Fi' : 'Wired',
+      iface: primary ? primary.name : null,
+      localIp: primary ? primary.address : null,
+      netmask: primary ? primary.netmask : null,
+      subnet: primary ? primary.subnet : null,
+      gateway: cachedEnv.gateway,
+      dns: cachedEnv.dnsServers || [],
+      ipv6: primary ? primary.ipv6 : null,
+      range: primary ? primary.hostRange : null,
+      usableHosts: primary ? primary.usableHosts : null,
+      dhcp: cachedEnv.dhcpServer,
+      domain: null,
+      observedAt: cachedEnv.observedAt
+    };
+  }
+
   return {
     get online() { return state.online; },
     get checked() { return state.checked; },
     get info() { return state.info; },
     get error() { return state.error; },
     get hasToken() { return !!token; },
-    probe, environment, startScan, control, stream,
+    get cachedEnvironment() { return cachedEnv; },
+    probe, environment, network, startScan, control, stream,
     inspectTls, fetchUrl, checkPort, hydrate
   };
 })();
 
-/* The screens that have not yet been rewritten still reference CT.demo.
-   It resolves to the real environment with no pre-known assets, so nothing
-   fabricated can reach the UI through it. */
+/* Screens not yet rewritten still reference CT.demo. It resolves to the real
+   observed network with no pre-known assets, so nothing fabricated can reach
+   the UI through it. */
 CT.demo = {
   ENVIRONMENTS: [],
   build: function () {
-    const env = CT.live.info && CT.live.cachedEnvironment ? CT.live.cachedEnvironment : null;
-    return { network: env || { name: 'Local network', subnet: null, gateway: null }, assets: [] };
+    return {
+      network: CT.live.network() || { name: 'Local network', subnet: null, gateway: null },
+      assets: []
+    };
   }
 };
