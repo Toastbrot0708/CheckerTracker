@@ -26,12 +26,9 @@
   reports, all computed on the device. The scanner service in server/ is the
   sensor: it performs the real network probes a browser cannot.
 
-  Without the service the console still runs, and says so plainly — the
+  Without the service the console still runs and says so plainly — the
   offline tools (certificate parsing, DNS, header analysis, CIDR maths,
   hashing) are real either way. It never substitutes invented data.
-
-  Each script below is one module on the global `CT` namespace, loaded in
-  dependency order as a classic script. See docs/ARCHITECTURE.md.
 
   SAFETY BOUNDARY: read-only observation and analysis only. No exploitation,
   credential capture, authentication bypass, persistence or evasion
@@ -72,6 +69,7 @@
 
 <!-- State -->
 <script src="src/17-store.js"></script>
+<script src="src/17a-store-live.js"></script>
 
 <!-- Presentation -->
 <script src="src/18-ui-shell.js"></script>
@@ -85,8 +83,6 @@
 <script src="src/25-ui-settings.js"></script>
 <script src="src/26b-ui-boot.js"></script>
 
-<!-- Home-screen install and offline shell. Not part of CT; the app runs
-     identically without it. -->
 <script src="pwa.js"></script>
 
 </body>
