@@ -1,22 +1,23 @@
 /* ============================================================================
    CheckerTracker service worker — offline application shell.
 
-   Two rules matter more than the caching strategy itself:
+   Three rules matter more than the caching strategy:
 
-   1. Only same-origin GET requests are ever intercepted. The DNS Inspector's
-      DNS-over-HTTPS queries and the HTTP Header Analyzer's URL fetch must
-      always reach the network. A cached DoH answer presented as a live lookup
-      would make the app lie about what it observed, and being honest about
-      what is real is the entire point of the capability layer.
+   1. Only same-origin GET requests are intercepted. The DNS Inspector's
+      DNS-over-HTTPS queries must always reach the network; a cached answer
+      presented as a live lookup would make the app lie about what it saw.
 
-   2. skipWaiting() is never called. A newly installed worker stays in the
-      waiting state until every tab is closed, so application files can never
-      be swapped underneath a running assessment. pwa.js surfaces a quiet
-      "relaunch to apply" toast instead of forcing a reload.
+   2. /api is never cached, ever. That is the scanner service. A stored
+      response replayed as a fresh measurement would be the worst thing this
+      application could do.
+
+   3. skipWaiting() is never called. A new worker waits until every tab is
+      closed, so files cannot be swapped underneath a running assessment.
+      pwa.js shows a quiet "relaunch to apply" toast instead.
    ========================================================================= */
 'use strict';
 
-const VERSION = 'checkertracker-v1';
+const VERSION = 'checkertracker-v2';
 
 const SHELL = [
   './',
@@ -32,7 +33,7 @@ const SHELL = [
   './src/04-crypto.js',
   './src/05-net.js',
   './src/06-data.js',
-  './src/07-demo.js',
+  './src/07-live.js',
   './src/08-engine-capabilities.js',
   './src/09-engine-tls.js',
   './src/10-engine-web.js',
@@ -41,17 +42,19 @@ const SHELL = [
   './src/13-engine-assetdb.js',
   './src/14-engine-dns.js',
   './src/15-engine-report.js',
-  './src/16-engine-scanner.js',
+  './src/15a-scan-profiles.js',
+  './src/16b-scanner-live.js',
   './src/17-store.js',
   './src/18-ui-shell.js',
   './src/19-ui-dashboard.js',
-  './src/20-ui-scan.js',
+  './src/20c-ui-scan-run.js',
+  './src/20d-ui-scan-wizard.js',
   './src/21-ui-findings.js',
   './src/22-ui-assets.js',
   './src/23-ui-reports.js',
   './src/24-ui-tools.js',
   './src/25-ui-settings.js',
-  './src/26-ui-boot.js'
+  './src/26b-ui-boot.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -70,12 +73,10 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
 
-  // Rule 1. Not calling respondWith() lets the request proceed untouched.
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return;
+  if (url.origin !== self.location.origin) return;              // rule 1
+  if (url.pathname.indexOf('/api') !== -1) return;              // rule 2
 
-  // Navigations prefer the network so a redeploy is picked up straight away,
-  // and fall back to the cached shell when there is no connection.
   if (req.mode === 'navigate') {
     event.respondWith(
       fetch(req)
@@ -89,7 +90,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Everything else: serve from cache immediately, refresh in the background.
   event.respondWith(
     caches.match(req).then((hit) => {
       const network = fetch(req).then((res) => {
