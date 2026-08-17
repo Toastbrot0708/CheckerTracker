@@ -2,13 +2,19 @@
 
 Emits the events the browser progress screen already consumes. Progress
 counts completed work, never elapsed time.
+
+Parallelism is deliberately modest. Sweeps are flat — one pool over every
+(address, port) pair — because a pool per host with a pool inside it
+multiplies out to hundreds of threads and dies with 'can't start new thread'
+wherever Python runs inside a host app, which is exactly the case on iOS.
 """
 
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import httpprobe, names, probe, sysinfo, tlsprobe
+
+MAX_WORKERS = 32
 
 
 class Cancelled(Exception):
@@ -17,13 +23,13 @@ class Cancelled(Exception):
 
 class Assessment(object):
     def __init__(self, run_id, scope, depth="services", stages=None,
-                 gateway=None, concurrency=64):
+                 gateway=None, concurrency=16):
         self.id = run_id
         self.scope = scope
         self.depth = depth
         self.stage_ids = stages or []
         self.gateway = gateway
-        self.concurrency = concurrency
+        self.concurrency = max(4, min(MAX_WORKERS, concurrency))
 
         self.state = "running"
         self.started_at = int(time.time() * 1000)
@@ -34,18 +40,17 @@ class Assessment(object):
         self.events = []
         self.counters = {"hosts": 0, "hostsTotal": scope.total, "services": 0}
 
-        self._lock = threading.Lock()
-        self._resume = threading.Event()
-        self._resume.set()
+        self._paused = False
         self._cancelled = False
-        self._units = scope.total
+        self._units = scope.total * len(probe.LIVENESS_PORTS)
         self._done = 0
 
+    # -- events ------------------------------------------------------------
+
     def emit(self, kind, payload):
-        with self._lock:
-            self.events.append({"type": kind, "data": payload})
-            if len(self.events) > 4000:
-                del self.events[:1000]
+        self.events.append({"type": kind, "data": payload})
+        if len(self.events) > 4000:
+            del self.events[:1000]
 
     def add_log(self, text, kind="info"):
         entry = {"ts": int(time.time() * 1000), "text": text, "kind": kind}
@@ -54,8 +59,8 @@ class Assessment(object):
             self.log.pop(0)
         self.emit("log", entry)
 
-    def tick(self):
-        self._done += 1
+    def tick(self, count=1):
+        self._done += count
         pct = min(99, int(self._done * 100 / max(1, self._units)))
         if pct != self.progress:
             self.progress = pct
@@ -65,68 +70,120 @@ class Assessment(object):
         self.emit("stage", {"id": stage_id, "state": state, "meta": meta})
 
     def checkpoint(self):
-        self._resume.wait()
+        while self._paused and not self._cancelled:
+            time.sleep(0.2)
         if self._cancelled:
             raise Cancelled()
 
     def pause(self):
-        self._resume.clear()
+        self._paused = True
         self.state = "paused"
         self.emit("state", "paused")
 
     def resume(self):
-        self._resume.set()
+        self._paused = False
         self.state = "running"
         self.emit("state", "running")
 
     def cancel(self):
         self._cancelled = True
-        self._resume.set()
+        self._paused = False
         self.state = "cancelled"
 
     def wants(self, stage_id):
         return stage_id in self.stage_ids
 
-    def _parallel(self, items, worker, workers):
+    # -- parallelism -------------------------------------------------------
+
+    def _pool_map(self, items, worker, workers):
+        """Map with a bounded pool, halving on thread exhaustion.
+
+        Some runtimes cap threads far below a desktop. Rather than fail the
+        assessment, back off and say so in the log.
+        """
         if not items:
             return []
-        self.checkpoint()
-        with ThreadPoolExecutor(max_workers=max(1, min(workers, len(items)))) as pool:
-            return list(pool.map(worker, items))
+        width = max(1, min(workers, len(items)))
+        while True:
+            try:
+                with ThreadPoolExecutor(max_workers=width) as pool:
+                    return list(pool.map(worker, items))
+            except RuntimeError as err:
+                if width <= 1 or "thread" not in str(err).lower():
+                    raise
+                width = max(1, width // 2)
+                self.concurrency = min(self.concurrency, width)
+                self.add_log(
+                    "Thread limit reached — reducing parallelism to %d and retrying"
+                    % width, "info")
+
+    def _sweep(self, pairs, timeout):
+        """One flat pool over (address, port) pairs. Returns {ip: [results]}."""
+        def one(pair):
+            self.checkpoint()
+            ip, port = pair
+            result = probe.probe_port(ip, port, timeout)
+            self.tick()
+            return ip, result
+
+        grouped = {}
+        for item in self._pool_map(pairs, one, self.concurrency):
+            if not item:
+                continue
+            ip, result = item
+            grouped.setdefault(ip, []).append(result)
+        return grouped
 
     # -- stages ------------------------------------------------------------
 
     def _discover(self):
-        def check(ip):
-            self.checkpoint()
-            live = probe.probe_liveness(ip)
-            self.tick()
-            if live["alive"]:
-                self.add_log("Host responding: %s (%s)" % (ip, live["evidence"]), "hit")
-            return live
+        pairs = [(ip, port) for ip in self.scope.addresses
+                 for port in probe.LIVENESS_PORTS]
+        grouped = self._sweep(pairs, 0.7)
 
-        results = self._parallel(self.scope.addresses, check, self.concurrency)
-        return [r for r in results if r and r["alive"]]
+        live = []
+        for ip in self.scope.addresses:
+            results = grouped.get(ip)
+            if not results:
+                continue
+            open_ports = sorted(r["port"] for r in results if r["state"] == "open")
+            closed = [r for r in results if r["state"] == "closed"]
+            if not open_ports and not closed:
+                continue
+            rtts = [r["rttMs"] for r in results if r["state"] in ("open", "closed")]
+            evidence = "tcp-open" if open_ports else "tcp-refused"
+            live.append({"ip": ip, "alive": True, "evidence": evidence,
+                         "openPorts": open_ports,
+                         "rttMs": min(rtts) if rtts else None})
+            self.add_log("Host responding: %s (%s)" % (ip, evidence), "hit")
+        return live
 
     def _identify(self, live):
         if self.depth != "services":
-            for _ in live:
-                self.tick()
             return {}
+        pairs = [(host["ip"], port) for host in live for port in probe.TOP_PORTS]
+        self._units += len(pairs)
+        grouped = self._sweep(pairs, 0.9)
 
-        def sweep(host):
-            self.checkpoint()
-            scan = probe.scan_ports(host["ip"], probe.TOP_PORTS)
-            self.tick()
+        port_map = {}
+        for host in live:
+            results = grouped.get(host["ip"], [])
+            scan = {
+                "open": sorted(r["port"] for r in results if r["state"] == "open"),
+                "closed": sum(1 for r in results if r["state"] == "closed"),
+                "filtered": sum(1 for r in results if r["state"] == "filtered"),
+                "tested": len(results),
+            }
+            port_map[host["ip"]] = scan
             if scan["open"]:
                 self.add_log("%s: %d open of %d tested (%s)" % (
                     host["ip"], len(scan["open"]), scan["tested"],
                     ", ".join(str(p) for p in scan["open"][:8])), "hit")
-            return host["ip"], scan
-
-        return dict(self._parallel(live, sweep, max(4, self.concurrency // 8)))
+        return port_map
 
     def _metadata(self, live, port_map):
+        self._units += len(live)
+
         def gather(host):
             self.checkpoint()
             ip = host["ip"]
@@ -138,7 +195,8 @@ class Assessment(object):
 
             banners = {}
             if self.depth == "services":
-                for port in [p for p in open_ports if p not in probe.TLS_PORTS][:10]:
+                for port in [p for p in open_ports if p not in probe.TLS_PORTS][:8]:
+                    self.checkpoint()
                     text = probe.grab_banner(ip, port)
                     if text:
                         banners[port] = text
@@ -150,9 +208,10 @@ class Assessment(object):
             self.tick()
             if name:
                 self.add_log("Resolved %s -> %s (%s)" % (ip, name["name"], name["source"]))
-            return ip, {"name": name, "ttl": ttl, "banners": banners, "classification": info}
+            return ip, {"name": name, "ttl": ttl, "banners": banners,
+                        "classification": info}
 
-        return dict(self._parallel(live, gather, 12))
+        return dict(self._pool_map(live, gather, min(6, self.concurrency)))
 
     def _endpoints(self, live, port_map, predicate):
         targets = []
@@ -169,8 +228,8 @@ class Assessment(object):
     def run(self):
         try:
             self.stage("authorize", "active")
-            self.add_log("Scope authorized: %s (%d addresses)"
-                         % (self.scope.label, self.scope.total))
+            self.add_log("Scope authorized: %s (%d addresses, %d workers)"
+                         % (self.scope.label, self.scope.total, self.concurrency))
             self.stage("authorize", "done", "%d addresses" % self.scope.total)
 
             self.stage("discover", "active")
@@ -180,8 +239,6 @@ class Assessment(object):
             if not live:
                 self.finish([], {})
                 return
-
-            self._units += len(live) * 2
 
             port_map = {}
             if self.wants("identify"):
@@ -208,7 +265,8 @@ class Assessment(object):
                     if result["reachable"]:
                         tls_map[ip] = result
                         self.add_log("TLS %s:%d  %s  %s" % (
-                            ip, port, result["negotiated"], result["cipher"] or "cipher unknown"))
+                            ip, port, result["negotiated"],
+                            result["cipher"] or "cipher unknown"))
                 self.stage("tls", "done", "%d endpoints" % len(tls_map))
 
             http_map = {}
@@ -221,7 +279,8 @@ class Assessment(object):
                 for ip, port in targets:
                     self.checkpoint()
                     host_name = (meta.get(ip, {}).get("name") or {}).get("name")
-                    result = httpprobe.probe_web(ip, port, port in probe.TLS_PORTS, host_name)
+                    result = httpprobe.probe_web(
+                        ip, port, port in probe.TLS_PORTS, host_name)
                     self.tick()
                     if result:
                         http_map[ip] = result
@@ -296,7 +355,6 @@ def build_assets(live, port_map, meta, tls_map, http_map):
                 "banner": banners.get(port),
             })
 
-        tls = tls_map.get(ip)
         assets.append({
             "id": "asset-" + ip.replace(".", "-"),
             "ip": ip,
@@ -315,7 +373,7 @@ def build_assets(live, port_map, meta, tls_map, http_map):
             "ttl": info.get("ttl"),
             "firstSeen": observed_at, "lastSeen": observed_at,
             "services": services,
-            "tls": tls, "http": http_map.get(ip),
+            "tls": tls_map.get(ip), "http": http_map.get(ip),
             "coverage": {
                 "portsTested": (scan or {}).get("tested", len(probe.LIVENESS_PORTS)),
                 "portsOpen": len(open_ports),
