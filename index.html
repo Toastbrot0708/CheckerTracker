@@ -22,17 +22,20 @@
 <!--
   CheckerTracker — Security visibility for authorized environments.
 
-  No build step, no dependencies, no network requirements. Serve this directory
-  over HTTP (a secure context is needed for WebCrypto, so http://localhost
-  works) or open the file directly for everything except at-rest encryption
-  and SHA-family hashing.
+  Two halves. This page is the console: inventory, analysis, scoring and
+  reports, all computed on the device. The scanner service in server/ is the
+  sensor: it performs the real network probes a browser cannot.
+
+  Without the service the console still runs, and says so plainly — the
+  offline tools (certificate parsing, DNS, header analysis, CIDR maths,
+  hashing) are real either way. It never substitutes invented data.
 
   Each script below is one module on the global `CT` namespace, loaded in
   dependency order as a classic script. See docs/ARCHITECTURE.md.
 
-  SAFETY BOUNDARY: this application performs read-only observation and analysis
-  only. It contains no exploitation, credential capture, authentication bypass,
-  persistence, or evasion capability of any kind. See SECURITY.md.
+  SAFETY BOUNDARY: read-only observation and analysis only. No exploitation,
+  credential capture, authentication bypass, persistence or evasion
+  capability of any kind. See SECURITY.md.
 -->
 
 <div id="ct-root" class="app-shell">
@@ -51,9 +54,9 @@
 <script src="src/04-crypto.js"></script>
 <script src="src/05-net.js"></script>
 
-<!-- Reference data and simulated environments -->
+<!-- Reference data and the scanner service client -->
 <script src="src/06-data.js"></script>
-<script src="src/07-demo.js"></script>
+<script src="src/07-live.js"></script>
 
 <!-- Analysis engines -->
 <script src="src/08-engine-capabilities.js"></script>
@@ -64,7 +67,8 @@
 <script src="src/13-engine-assetdb.js"></script>
 <script src="src/14-engine-dns.js"></script>
 <script src="src/15-engine-report.js"></script>
-<script src="src/16-engine-scanner.js"></script>
+<script src="src/15a-scan-profiles.js"></script>
+<script src="src/16b-scanner-live.js"></script>
 
 <!-- State -->
 <script src="src/17-store.js"></script>
@@ -72,13 +76,14 @@
 <!-- Presentation -->
 <script src="src/18-ui-shell.js"></script>
 <script src="src/19-ui-dashboard.js"></script>
-<script src="src/20-ui-scan.js"></script>
+<script src="src/20c-ui-scan-run.js"></script>
+<script src="src/20d-ui-scan-wizard.js"></script>
 <script src="src/21-ui-findings.js"></script>
 <script src="src/22-ui-assets.js"></script>
 <script src="src/23-ui-reports.js"></script>
 <script src="src/24-ui-tools.js"></script>
 <script src="src/25-ui-settings.js"></script>
-<script src="src/26-ui-boot.js"></script>
+<script src="src/26b-ui-boot.js"></script>
 
 <!-- Home-screen install and offline shell. Not part of CT; the app runs
      identically without it. -->
