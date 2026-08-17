@@ -5,13 +5,19 @@
     python3 run.py --update     fetch the latest build, then start
     python3 run.py --port 8900  use a different port
 
-Written for a-Shell on iOS, where Python runs inside the host app. Two
-things there need handling that a desktop does not: output is block-buffered
-unless told otherwise, and a previous run keeps serving after the prompt
-returns, so a second start cannot bind and a third crashes the interpreter.
-Both are dealt with before anything else happens.
+Written for a-Shell on iOS, where Python runs inside the host app. Three
+things there need handling that a desktop does not:
+
+  * Output is block-buffered and reconfigure(line_buffering=True) is not
+    enough, so print is replaced with a flushing version. Without this the
+    startup banner never appears and the service looks like it died.
+  * A previous run keeps serving after the prompt returns, so a second start
+    cannot bind the port and a third crashes the interpreter.
+  * The shell's working directory is easy to lose, so every path here is
+    absolute.
 """
 
+import builtins
 import os
 import socket
 import sys
@@ -22,12 +28,24 @@ ZIP_URL = ("https://github.com/Toastbrot0708/CheckerTracker/archive/refs/heads/%
            % BRANCH)
 
 
-def unbuffer():
+def force_flush():
+    """Make every print reach the screen immediately.
+
+    Applies to imported modules too, since they all call builtins.print.
+    """
     try:
         sys.stdout.reconfigure(line_buffering=True)
         sys.stderr.reconfigure(line_buffering=True)
     except (AttributeError, ValueError):
         pass
+
+    original = builtins.print
+
+    def flushing(*args, **kwargs):
+        kwargs["flush"] = True
+        original(*args, **kwargs)
+
+    builtins.print = flushing
 
 
 def port_is_free(port):
@@ -47,35 +65,36 @@ def port_is_free(port):
 
 def update():
     """Replace the working copy with the latest build."""
+    import io
     import shutil
-    import tempfile
     import urllib.request
     import zipfile
 
-    workspace = tempfile.mkdtemp()
-    archive_path = os.path.join(workspace, "ct.zip")
     print("Downloading the latest build ...")
     try:
-        urllib.request.urlretrieve(ZIP_URL, archive_path)
+        payload = urllib.request.urlopen(ZIP_URL, timeout=60).read()
     except Exception as err:                       # noqa: BLE001
         print("Download failed: %s" % err)
         print("If the repository is private, make it public first.")
         return False
+    print("Received %d bytes." % len(payload))
 
+    staging = os.path.join(os.path.dirname(ROOT), "_ct_staging")
+    shutil.rmtree(staging, ignore_errors=True)
     try:
-        with zipfile.ZipFile(archive_path) as archive:
-            archive.extractall(workspace)
+        zipfile.ZipFile(io.BytesIO(payload)).extractall(staging)
     except zipfile.BadZipFile:
-        print("That was not a zip file. The repository is probably still private.")
+        print("That was not a zip file — the repository is probably private.")
         return False
 
-    folders = [name for name in os.listdir(workspace)
-               if os.path.isdir(os.path.join(workspace, name))]
+    folders = [n for n in os.listdir(staging)
+               if os.path.isdir(os.path.join(staging, n))]
     if not folders:
         print("The archive contained nothing.")
+        shutil.rmtree(staging, ignore_errors=True)
         return False
 
-    source = os.path.join(workspace, folders[0])
+    source = os.path.join(staging, folders[0])
     for name in os.listdir(source):
         src = os.path.join(source, name)
         dst = os.path.join(ROOT, name)
@@ -84,11 +103,11 @@ def update():
             shutil.copytree(src, dst)
         else:
             shutil.copy2(src, dst)
+    shutil.rmtree(staging, ignore_errors=True)
 
-    shutil.rmtree(workspace, ignore_errors=True)
-    print("Updated.\n")
-    print("Note: GitHub caches this archive for a few minutes, so a build")
-    print("pushed just now may take a moment to appear here.\n")
+    print("Updated.")
+    print("GitHub caches this archive briefly, so a build pushed in the last")
+    print("minute or two may not be in it yet.\n")
     return True
 
 
@@ -101,7 +120,7 @@ def port_from(argv):
 
 
 def main():
-    unbuffer()
+    force_flush()
     argv = [a for a in sys.argv[1:] if a != "--update"]
 
     if "--update" in sys.argv[1:] and not update():
