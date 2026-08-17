@@ -11,6 +11,7 @@ CT.live = (function () {
   let cachedEnv = null;
 
   const state = { online: false, checked: false, info: null, error: null };
+  const UNKNOWN = 'not determined';
 
   /* The service prints a URL carrying the token. Take it once, keep it for
      the session, and strip it from the address bar so copying the URL out of
@@ -55,7 +56,6 @@ CT.live = (function () {
     } finally { clearTimeout(timer); }
   }
 
-  /** Is the scanner service reachable? Everything else depends on this. */
   async function probe() {
     try {
       state.info = await call('/health', null, 4000);
@@ -112,9 +112,7 @@ CT.live = (function () {
   /* ==========================================================================
      HYDRATION
      The service measures. Naming a port, resolving an OUI and decoding a
-     certificate use reference data and parsers the client already holds, so
-     they happen here rather than being duplicated server-side where the two
-     copies could drift apart.
+     certificate use reference data and parsers the client already holds.
      ======================================================================= */
 
   function hydrateService(service) {
@@ -136,11 +134,6 @@ CT.live = (function () {
     return out;
   }
 
-  /**
-   * Turn service records into full CT assets.
-   * @param {Array} assets     raw records from the scanner service
-   * @param {Array} [baseline] previous assessment's assets, for inInventory
-   */
   function hydrate(assets, baseline) {
     const known = baseline ? new Set(baseline.map((a) => a.mac || a.ip)) : null;
 
@@ -166,25 +159,48 @@ CT.live = (function () {
     });
   }
 
-  /** Shape the observed environment like CT's network record. */
+  /**
+   * The observed environment, in CT's network shape.
+   *
+   * Every field the Dashboard and Discover read bare must be a string — they
+   * hand it straight to kv(), and undefined there is what threw the
+   * appendChild error. Values the platform will not disclose say so in words
+   * rather than going missing, so the gap stays visible instead of silent.
+   */
   function network() {
     if (!cachedEnv) return null;
-    const primary = cachedEnv.primary;
+    const p = cachedEnv.primary || {};
+    const wifi = cachedEnv.wifi || null;
+
     return {
-      name: cachedEnv.wifi && cachedEnv.wifi.ssid ? cachedEnv.wifi.ssid : 'Local network',
-      ssid: cachedEnv.wifi ? cachedEnv.wifi.ssid : null,
-      type: cachedEnv.wifi ? 'Wi-Fi' : 'Wired',
-      iface: primary ? primary.name : null,
-      localIp: primary ? primary.address : null,
-      netmask: primary ? primary.netmask : null,
-      subnet: primary ? primary.subnet : null,
-      gateway: cachedEnv.gateway,
+      name: (wifi && wifi.ssid) || cachedEnv.hostname || 'Local network',
+      ssid: wifi ? wifi.ssid : null,
+      type: wifi ? 'Wi-Fi' : 'Wired or undetermined',
+      security: null,
+      band: null,
+      signal: wifi && wifi.signal ? wifi.signal : null,
+
+      interface: p.name || UNKNOWN,
+      localIp: p.address || UNKNOWN,
+      ipv4: p.address || UNKNOWN,
+      netmask: p.netmask || UNKNOWN,
+      subnet: p.subnet || null,          // raw CIDR; the wizard pre-fills from it
+      range: p.hostRange || UNKNOWN,
+      usableHosts: p.usableHosts || null,
+
+      gateway: cachedEnv.gateway || UNKNOWN,
       dns: cachedEnv.dnsServers || [],
-      ipv6: primary ? primary.ipv6 : null,
-      range: primary ? primary.hostRange : null,
-      usableHosts: primary ? primary.usableHosts : null,
-      dhcp: cachedEnv.dhcpServer,
-      domain: null,
+      dhcp: cachedEnv.dhcpServer || UNKNOWN,
+
+      ipv6: p.ipv6 || null,
+      ipv6Mode: p.ipv6 ? 'observed' : null,
+
+      // No portable way to detect a tunnel, an MTU or a search domain from a
+      // sandboxed process. Named rather than guessed.
+      vpn: UNKNOWN,
+      mtu: UNKNOWN,
+      domain: UNKNOWN,
+
       observedAt: cachedEnv.observedAt
     };
   }
